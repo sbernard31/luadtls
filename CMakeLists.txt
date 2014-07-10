@@ -30,7 +30,7 @@ add_library (core  SHARED src/lua_dtls_core.c ${TINYDTLS_SOURCES} )
 set_target_properties(core PROPERTIES PREFIX "")
 set_target_properties( core PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/dtls")
 
-file(COPY src/init.lua DESTINATION "${CMAKE_BINARY_DIR}/dtls")
+file(COPY src/dtls/init.lua DESTINATION "${CMAKE_BINARY_DIR}/dtls")
 file(COPY sample/sample.lua DESTINATION "${CMAKE_BINARY_DIR}")
 file(COPY sample/coresample.lua DESTINATION "${CMAKE_BINARY_DIR}")
 
