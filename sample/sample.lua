@@ -11,7 +11,7 @@ udp:setsockname('*', 5683)
 -- change UDP socket in DTLS socket
 dtls.wrap(udp,"PSK") -- ECC is managed too. (key is hard coded for now)
 
--- DTLS handshake in automaticaly do at first connection communicate
+-- DTLS handshake in automaticaly do at first sendto
 udp:sendto("my clear data","127.0.0.1", 5684)
 repeat
   local data, host, port, msg = udp:receivefrom()
