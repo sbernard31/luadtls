@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 2.8)
 find_package(Lua51 REQUIRED)
 
+execute_process(COMMAND autoconf WORKING_DIRECTORY ../tinydtls)
+execute_process(COMMAND ./configure WORKING_DIRECTORY ../tinydtls)
+
 set(TINYDTLS_SOURCES_DIR ${CMAKE_CURRENT_LIST_DIR}/tinydtls)
 set(TINYDTLS_SOURCES
 	${TINYDTLS_SOURCES_DIR}/dtls.c
@@ -30,3 +33,4 @@ set_target_properties( core PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_
 file(COPY src/init.lua DESTINATION "${CMAKE_BINARY_DIR}/dtls")
 file(COPY sample/sample.lua DESTINATION "${CMAKE_BINARY_DIR}")
 file(COPY sample/coresample.lua DESTINATION "${CMAKE_BINARY_DIR}")
+
