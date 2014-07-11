@@ -44,7 +44,8 @@ Compile it : (*You need cmake and autoconf -_-! ...*)
 ```
 mkdir [builddir]
 cd [builddir]
-cmake ../
+cmake [luadtls source directory]
+make
 ```
 
 Test it : (*Lua 5.1 and luasocket is needed.*)
