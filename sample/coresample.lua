@@ -20,8 +20,11 @@ local function event (data,host,port)
   print ("connected")
 end
 
+-- define security config
+local securityconfig = {security = "PSK", identity = "Client_identity", key = "secretPSK"}
+
 -- create new DTLS context 
-local ctx = dtlscore.newcontext(send, receive,event,"PSK") -- ECC is managed too. (key is hard coded for now)
+local ctx = dtlscore.newcontext(send, receive,event, securityconfig) 
 
 -- connect and communicate
 ctx:connect("127.0.0.1", 5684)

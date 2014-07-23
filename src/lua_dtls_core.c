@@ -67,6 +67,14 @@ typedef struct ldtls_ctxuserdata {
 	int sendCallbackRef;
 	int receiveCallbackRef;
 	int eventCallbackRef;
+	int securiryTableRef;
+	dtls_handler_t cb;
+#ifdef DTLS_PSK
+	dtls_psk_key_t pskkey;
+	unsigned char psk_id[256];
+	unsigned char psk_key[256];
+#endif /* DTLS_PSK */
+
 } ldtls_ctxuserdata;
 
 static ldtls_ctxuserdata * checklctx(lua_State * L, const char * functionname) {
@@ -143,7 +151,7 @@ int send_to_peer(struct dtls_context_t *ctx, session_t *session, uint8 *data,
 	char portstr[6];
 	int err = getip(session, addrstr, portstr);
 	if (err)
-		dtls_emerg( "cannot send to peer \n");
+		dtls_emerg("cannot send to peer \n");
 
 	//get host and port
 	lua_pushstring(L, addrstr);
@@ -172,42 +180,73 @@ int handle_event(struct dtls_context_t *ctx, session_t *session,
 }
 
 #ifdef DTLS_PSK
-#ifdef __GNUC__
-#define UNUSED_PARAM __attribute__((unused))
-#else
-#define UNUSED_PARAM
-#endif /* __GNUC__ */
-#define PSK_DEFAULT_IDENTITY "Client_identity"
-#define PSK_DEFAULT_KEY      "secretPSK"
+static int psksupported(lua_State *L, ldtls_ctxuserdata * ctxud) {
+	// get security table
+	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack : securitytable
 
-/* The PSK information for DTLS */
-#define PSK_ID_MAXLEN 256
-#define PSK_MAXLEN 256
-static unsigned char psk_id[PSK_ID_MAXLEN];
-static unsigned char psk_key[PSK_MAXLEN];
+	// get the security field
+	lua_getfield(L, -1, "security"); //stack : securitytable, securityfield
+	size_t size;
+	const char * securitymode = lua_tolstring(L, -1, &size);
 
-static dtls_psk_key_t psk = { .id = psk_id, .id_length = 0, .key = psk_key,
-		.key_length = 0 };
+	// check if PSK is supported
+	int res = securitymode != NULL && (strcmp(securitymode, "PSK") == 0);
+
+	// clean the stack
+	lua_pop(L, 2);
+	return res;
+}
 
 /* This function is the "key store" for tinyDTLS. It is called to
  * retrieve a key for the given identiy within this particular
  * session. */
-static int get_psk_key(struct dtls_context_t *ctx UNUSED_PARAM,
-		const session_t *session UNUSED_PARAM,
-		const unsigned char *id UNUSED_PARAM, size_t id_len UNUSED_PARAM,
-		const dtls_psk_key_t **result) {
+static int get_psk_key(struct dtls_context_t *ctx, const session_t *session,
+		const unsigned char *id, size_t id_len,const dtls_psk_key_t **result) {
 
-	psk.id_length = strlen(PSK_DEFAULT_IDENTITY);
-	psk.key_length = strlen(PSK_DEFAULT_KEY);
-	memcpy(psk.id, PSK_DEFAULT_IDENTITY, psk.id_length);
-	memcpy(psk.key, PSK_DEFAULT_KEY, psk.key_length);
+	// Get lua context userdata.
+	ldtls_ctxuserdata * ctxud = (ldtls_ctxuserdata *) dtls_get_app_data(ctx);
+	lua_State * L = ctxud->L;
 
-	*result = &psk;
+	// get security table
+	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack : securitytable
+
+	// get the identify field
+	lua_getfield(L, -1, "identity"); //stack : securitytable, identityfield
+	size_t identity_length;
+	const char * identity = lua_tolstring(L, -1, &identity_length);
+	if (identity == NULL)
+		return -1;
+
+	// get the key field
+	lua_getfield(L, -2, "key"); //stack : securitytable, identityfield, keyfield
+	size_t key_length;
+	const char * key = lua_tolstring(L, -1, &key_length);
+	if (key == NULL)
+		return -1;
+
+	// store Key in memory
+	char * pskid = malloc(identity_length);
+	char * pskkey = malloc(key_length);
+
+	memcpy(ctxud->psk_id, identity, identity_length);
+	memcpy(ctxud->psk_key, key, key_length);
+
+	ctxud->pskkey.id = ctxud->psk_id;
+	ctxud->pskkey.id_length = identity_length;
+	ctxud->pskkey.key = ctxud->psk_key;
+	ctxud->pskkey.key_length = key_length;
+
+	//clean the stack
+	lua_pop(L, 3);
+	*result = &ctxud->pskkey;
 	return 0;
 }
 #endif /* DTLS_PSK */
 
 #ifdef DTLS_ECC
+static int eccsupported(lua_State *L, ldtls_ctxuserdata * ctxud) {
+	return 0;
+}
 static const unsigned char ecdsa_priv_key[] = { 0x41, 0xC1, 0xCB, 0x6B, 0x51,
 		0x24, 0x7A, 0x14, 0x43, 0x21, 0x43, 0x5B, 0x7A, 0x80, 0xE7, 0x14, 0x89,
 		0x6A, 0x33, 0xBB, 0xAD, 0x72, 0x94, 0xCA, 0x40, 0x14, 0x55, 0xA1, 0x94,
@@ -240,16 +279,6 @@ static int verify_ecdsa_key(struct dtls_context_t *ctx,
 }
 #endif /* DTLS_ECC */
 
-static dtls_handler_t cb = { .write = send_to_peer, .read = read_from_peer,
-		.event = handle_event,
-#ifdef DTLS_PSK
-		.get_psk_key = get_psk_key,
-#endif /* DTLS_PSK */
-#ifdef DTLS_ECC
-		.get_ecdsa_key = get_ecdsa_key, .verify_ecdsa_key = verify_ecdsa_key
-#endif /* DTLS_ECC */
-		};
-
 static int ldtls_init(lua_State *L) {
 	dtls_init();
 	//dtls_set_log_level(LOG_DEBUG);
@@ -263,57 +292,68 @@ static int ldtls_newcontext(lua_State *L) {
 	// 2nd parameter : should be a callback (receive).
 	luaL_checktype(L, 2, LUA_TFUNCTION);
 
-	// 3nd parameter : should be a callback (event).
+	// 3rd parameter : should be a callback (event).
 	luaL_checktype(L, 3, LUA_TFUNCTION);
 
-	// 4nd parameter : should be a string).
-	const char * security = luaL_checkstring(L, 4);
-
-	lua_pop(L,1);
+	// 4th parameter : should be a table (security config).
+	luaL_checktype(L, 4, LUA_TTABLE);
 
 	// Create llwm userdata object and set its metatable.
-	ldtls_ctxuserdata * ctxud = lua_newuserdata(L, sizeof(ldtls_ctxuserdata)); // stack: sendcallback, receivecallback, ctxud
+	ldtls_ctxuserdata * ctxud = lua_newuserdata(L, sizeof(ldtls_ctxuserdata)); // stack: sendcallback, receivecallback, eventcallback, securitytable, ctxud
 	ctxud->L = L;
 	ctxud->sendCallbackRef = LUA_NOREF;
 	ctxud->receiveCallbackRef = LUA_NOREF;
 	ctxud->eventCallbackRef = LUA_NOREF;
+	ctxud->securiryTableRef = LUA_NOREF;
 	ctxud->ctx = NULL;
-	luaL_getmetatable(L, "luadtls.ctx"); // stack: sendcallback, receivecallback, ctxud, metatable
-	lua_setmetatable(L, -2); // stack: sendcallback, receivecallback, ctxud
-	lua_insert(L, 1); // stack: ctxud, sendcallback, receivecallback
-
-	// Store the callbacks in Lua registry to keep a reference on it.
-	int eventCallbackref = luaL_ref(L, LUA_REGISTRYINDEX); // stack: ctxud,
-	int receiveCallbackref = luaL_ref(L, LUA_REGISTRYINDEX); // stack: ctxud, sendcallback
-	int sendCallbackref = luaL_ref(L, LUA_REGISTRYINDEX); // stack: ctxud
+	luaL_getmetatable(L, "luadtls.ctx"); // stack: sendcallback, receivecallback, eventcallback, securitytable, ctxud, metatable
+	lua_setmetatable(L, -2); // stack: sendcallback, receivecallback, eventcallback, securitytable, ctxud
+	lua_insert(L, 1); // stack: ctxud, sendcallback, receivecallback, eventcallback, securitytable
 
 	// Create DTLS context.
 	dtls_context_t * dtls_context = dtls_new_context(ctxud);
-
-	// Manage security.
-	if (strcmp(security, "ECC") == 0) {
-#ifdef DTLS_PSK
-		cb.get_psk_key = NULL;
-#endif /* DTLS_PSK */
-	} else {
-#ifdef DTLS_ECC
-		cb.get_ecdsa_key = NULL;
-		cb.verify_ecdsa_key = NULL;
-#endif  /* DTLS_ECC */
-	}
-
-	dtls_set_handler(dtls_context, &cb);
 	if (!dtls_context) {
-		// TODO manage error
-		dtls_emerg( "cannot create context\n");
-		exit(-1);
+		luaL_error(L, "Unable to create context.");
 	}
+
+	// Store the callbacks in Lua registry to keep a reference on it.
+	int securiryTableRef = luaL_ref(L, LUA_REGISTRYINDEX); // stack: ctxud, sendcallback, receivecallback, eventcallback
+	int eventCallbackref = luaL_ref(L, LUA_REGISTRYINDEX); // stack: ctxud, sendcallback, receivecallback
+	int receiveCallbackref = luaL_ref(L, LUA_REGISTRYINDEX); // stack: ctxud, sendcallback
+	int sendCallbackref = luaL_ref(L, LUA_REGISTRYINDEX); // stack: ctxud
 
 	// Store it in userdata context.
 	ctxud->ctx = dtls_context;
 	ctxud->sendCallbackRef = sendCallbackref;
 	ctxud->receiveCallbackRef = receiveCallbackref;
 	ctxud->eventCallbackRef = eventCallbackref;
+	ctxud->securiryTableRef = securiryTableRef;
+
+	// initialize the callback handler for this context
+	ctxud->cb.write = send_to_peer;
+	ctxud->cb.read = read_from_peer;
+	ctxud->cb.event = handle_event;
+
+	// Manage security.
+#ifdef DTLS_PSK
+	if (psksupported(L, ctxud)) {
+		ctxud->cb.get_psk_key = get_psk_key;
+	} else {
+		ctxud->cb.get_psk_key = NULL;
+	}
+#endif /* DTLS_PSK */
+#ifdef DTLS_ECC
+	if (eccsupported(L, ctxud)) {
+		ctxud->cb.get_ecdsa_key = get_ecdsa_key;
+		ctxud->cb.verify_ecdsa_key = verify_ecdsa_key;
+	} else {
+		ctxud->cb.get_ecdsa_key = NULL;
+		ctxud->cb.verify_ecdsa_key = NULL;
+	}
+#endif  /* DTLS_ECC */
+
+	// set callback for this handler
+	dtls_set_handler(dtls_context, &ctxud->cb);
 
 	return 1;
 }
@@ -332,12 +372,12 @@ static int ldtls_connect(lua_State *L) {
 	int err;
 	err = getsockaddr(host, port, &dst);
 	if (err)
-		dtls_emerg( "cannot connect \n");
+		dtls_emerg("cannot connect \n");
 
 	// Try to connect.
 	int res = dtls_connect(ctxud->ctx, &dst);
 	if (!res)
-		dtls_emerg( "cannot connect \n");
+		dtls_emerg("cannot connect \n");
 	return 1;
 }
 
@@ -359,7 +399,7 @@ static int ldtls_handle(lua_State *L) {
 	int err;
 	err = getsockaddr(host, port, &dst);
 	if (err)
-		dtls_emerg( "cannot handle \n");
+		dtls_emerg("cannot handle \n");
 
 	dtls_handle_message(ctxud->ctx, &dst, buffer, length);
 	return 0;
@@ -383,7 +423,7 @@ static int ldtls_write(lua_State *L) {
 	int err;
 	err = getsockaddr(host, port, &dst);
 	if (err)
-		dtls_emerg( "cannot write \n");
+		dtls_emerg("cannot write \n");
 
 	dtls_write(ctxud->ctx, &dst, buffer, length);
 	return 0;
