@@ -36,3 +36,7 @@ repeat
 until false
 
 ctx:write("127.0.0.1",5684,"my clear data");
+
+-- free the DTLS context
+ctx:free()
+udp:close()

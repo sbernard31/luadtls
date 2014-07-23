@@ -18,3 +18,6 @@ repeat
   -- receive clear data
   print ("receive clear data",data, host, port)
 until false
+
+-- free the DTLS context and close the udp socket
+udp:close()

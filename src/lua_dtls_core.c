@@ -406,7 +406,7 @@ static int ldtls_handle(lua_State *L) {
 }
 
 static int ldtls_write(lua_State *L) {
-	// Get lua DTLS context object
+	// Get lua DTLS context object.
 	ldtls_ctxuserdata* ctxud = checklctx(L, "write");
 
 	// Get peer address.
@@ -429,8 +429,32 @@ static int ldtls_write(lua_State *L) {
 	return 0;
 }
 
+static int ldtls_free_context(lua_State *L) {
+	// Get lua DTLS context object.
+	ldtls_ctxuserdata* ctxud = checklctx(L, "c");
+
+	// Free the context.
+	dtls_free_context(ctxud->ctx);
+
+	// Release callbacks and tables.
+	luaL_unref(L, LUA_REGISTRYINDEX, ctxud->sendCallbackRef);
+	ctxud->sendCallbackRef = LUA_NOREF;
+	luaL_unref(L, LUA_REGISTRYINDEX, ctxud->receiveCallbackRef);
+	ctxud->receiveCallbackRef = LUA_NOREF;
+	luaL_unref(L, LUA_REGISTRYINDEX, ctxud->eventCallbackRef);
+	ctxud->eventCallbackRef = LUA_NOREF;
+	luaL_unref(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef);
+	ctxud->securiryTableRef = LUA_NOREF;
+
+	// Free lua DTLS context object
+	free(ctxud);
+
+	return 0;
+}
+
 static const struct luaL_Reg ldtls_objmeths[] = { { "connect", ldtls_connect },
-		{ "handle", ldtls_handle }, { "write", ldtls_write }, {
+		{ "handle", ldtls_handle }, { "write", ldtls_write }, { "free",
+				ldtls_free_context }, {
 		NULL, NULL } };
 
 static const struct luaL_Reg ldtls_modulefuncs[] = { { "init", ldtls_init }, {

@@ -5,7 +5,6 @@ dtls.init()
 
 local M = {}
 
-
 local function dtlsreceivefrom(udp,size)
   local data, ip, port, msg = udp:oreceivefrom()
   if data and ip and port then
@@ -15,7 +14,6 @@ local function dtlsreceivefrom(udp,size)
   end
   return data, ip, port, msg
 end
-
 
 local function dtlssendto(udp, datagram, ip, port)
   if not udp.dtls.connected then
@@ -31,6 +29,10 @@ local function dtlssendto(udp, datagram, ip, port)
   udp.dtls.ctx:write(ip,port,datagram);
 end
 
+local function dtlsclose(udp)
+  udp.dtls.ctx:free()
+  udp:oclose()
+end
 
 function M.wrap(udp, security)
   -- wrap metatable
@@ -80,7 +82,7 @@ function M.wrap(udp, security)
   -- wrap method
   m.o__index.sendto = dtlssendto
   m.o__index.receivefrom = dtlsreceivefrom
+  m.o__index.close = dtlsclose
 end
-
 
 return M
