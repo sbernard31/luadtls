@@ -48,7 +48,7 @@ cmake [luadtls source directory]
 make
 ```
 
-Test it : (*Lua 5.1 and luasocket is needed.*)
+Test it : (*Lua 5.1 and luasocket is needed, you can use [californium.sandium](https://github.com/eclipse/californium.scandium) server implementation to test.*)
 ```
 lua -e "package.path = './?/init.lua;' .. package.path" sample.lua
 ```
