@@ -70,11 +70,19 @@ typedef struct ldtls_ctxuserdata {
 	int securiryTableRef;
 	dtls_handler_t cb;
 #ifdef DTLS_PSK
+#define PSK_ID_MAXLEN 256
+#define PSK_MAXLEN 256
 	dtls_psk_key_t pskkey;
-	unsigned char psk_id[256];
-	unsigned char psk_key[256];
+	unsigned char psk_id[PSK_ID_MAXLEN];
+	unsigned char psk_key[PSK_MAXLEN];
 #endif /* DTLS_PSK */
-
+#ifdef DTLS_ECC
+#define ECC_MAXLEN 128
+	dtls_ecdsa_key_t ecdsakey;
+	unsigned char priv_key[ECC_MAXLEN]; /** < private key as bytes > */
+	unsigned char pub_key_x[ECC_MAXLEN]; /** < x part of the public key for the given private key > */
+	unsigned char pub_key_y[ECC_MAXLEN]; /** < y part of the public key for the given private key > */
+#endif /* DTLS_ECC */
 } ldtls_ctxuserdata;
 
 static ldtls_ctxuserdata * checklctx(lua_State * L, const char * functionname) {
@@ -197,11 +205,8 @@ static int psksupported(lua_State *L, ldtls_ctxuserdata * ctxud) {
 	return res;
 }
 
-/* This function is the "key store" for tinyDTLS. It is called to
- * retrieve a key for the given identiy within this particular
- * session. */
 static int get_psk_key(struct dtls_context_t *ctx, const session_t *session,
-		const unsigned char *id, size_t id_len,const dtls_psk_key_t **result) {
+		const unsigned char *id, size_t id_len, const dtls_psk_key_t **result) {
 
 	// Get lua context userdata.
 	ldtls_ctxuserdata * ctxud = (ldtls_ctxuserdata *) dtls_get_app_data(ctx);
@@ -214,20 +219,17 @@ static int get_psk_key(struct dtls_context_t *ctx, const session_t *session,
 	lua_getfield(L, -1, "identity"); //stack : securitytable, identityfield
 	size_t identity_length;
 	const char * identity = lua_tolstring(L, -1, &identity_length);
-	if (identity == NULL)
+	if (identity == NULL || identity_length > PSK_ID_MAXLEN)
 		return -1;
 
 	// get the key field
 	lua_getfield(L, -2, "key"); //stack : securitytable, identityfield, keyfield
 	size_t key_length;
 	const char * key = lua_tolstring(L, -1, &key_length);
-	if (key == NULL)
+	if (key == NULL || key_length > PSK_MAXLEN)
 		return -1;
 
 	// store Key in memory
-	char * pskid = malloc(identity_length);
-	char * pskkey = malloc(key_length);
-
 	memcpy(ctxud->psk_id, identity, identity_length);
 	memcpy(ctxud->psk_key, key, key_length);
 
@@ -245,30 +247,67 @@ static int get_psk_key(struct dtls_context_t *ctx, const session_t *session,
 
 #ifdef DTLS_ECC
 static int eccsupported(lua_State *L, ldtls_ctxuserdata * ctxud) {
-	return 0;
+	// get security table
+	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack : securitytable
+
+	// get the security field
+	lua_getfield(L, -1, "security"); //stack : securitytable, securityfield
+	size_t size;
+	const char * securitymode = lua_tolstring(L, -1, &size);
+
+	// check if PSK is supported
+	int res = securitymode != NULL && (strcmp(securitymode, "ECC") == 0);
+
+	// clean the stack
+	lua_pop(L, 2);
+	return res;
 }
-static const unsigned char ecdsa_priv_key[] = { 0x41, 0xC1, 0xCB, 0x6B, 0x51,
-		0x24, 0x7A, 0x14, 0x43, 0x21, 0x43, 0x5B, 0x7A, 0x80, 0xE7, 0x14, 0x89,
-		0x6A, 0x33, 0xBB, 0xAD, 0x72, 0x94, 0xCA, 0x40, 0x14, 0x55, 0xA1, 0x94,
-		0xA9, 0x49, 0xFA };
-
-static const unsigned char ecdsa_pub_key_x[] = { 0x36, 0xDF, 0xE2, 0xC6, 0xF9,
-		0xF2, 0xED, 0x29, 0xDA, 0x0A, 0x9A, 0x8F, 0x62, 0x68, 0x4E, 0x91, 0x63,
-		0x75, 0xBA, 0x10, 0x30, 0x0C, 0x28, 0xC5, 0xE4, 0x7C, 0xFB, 0xF2, 0x5F,
-		0xA5, 0x8F, 0x52 };
-
-static const unsigned char ecdsa_pub_key_y[] = { 0x71, 0xA0, 0xD4, 0xFC, 0xDE,
-		0x1A, 0xB8, 0x78, 0x5A, 0x3C, 0x78, 0x69, 0x35, 0xA7, 0xCF, 0xAB, 0xE9,
-		0x3F, 0x98, 0x72, 0x09, 0xDA, 0xED, 0x0B, 0x4F, 0xAB, 0xC3, 0x6F, 0xC7,
-		0x72, 0xF8, 0x29 };
 
 static int get_ecdsa_key(struct dtls_context_t *ctx, const session_t *session,
 		const dtls_ecdsa_key_t **result) {
-	static const dtls_ecdsa_key_t ecdsa_key = { .curve =
-			DTLS_ECDH_CURVE_SECP256R1, .priv_key = ecdsa_priv_key, .pub_key_x =
-			ecdsa_pub_key_x, .pub_key_y = ecdsa_pub_key_y };
 
-	*result = &ecdsa_key;
+	// Get lua context userdata.
+	ldtls_ctxuserdata * ctxud = (ldtls_ctxuserdata *) dtls_get_app_data(ctx);
+	lua_State * L = ctxud->L;
+
+	// get security table
+	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack : securitytable
+
+	// get the private key field
+	lua_getfield(L, -1, "privatekey"); //stack : securitytable, privatekeyfield
+	size_t private_length;
+	const char * private = lua_tolstring(L, -1, &private_length);
+	if (private == NULL || private_length > ECC_MAXLEN)
+		return -1;
+
+	// get the x public key field
+	lua_getfield(L, -2, "xpublickey"); //stack : securitytable, privatekeyfield, xpublickeyfield
+	size_t xpublic_length;
+	const char * xpublic = lua_tolstring(L, -1, &xpublic_length);
+	if (xpublic == NULL || xpublic_length > ECC_MAXLEN)
+		return -1;
+
+	// get the x public key field
+	lua_getfield(L, -3, "ypublickey"); //stack : securitytable, privatekeyfield, xpublickeyfield, ypublickeyfield
+	size_t ypublic_length;
+	const char * ypublic = lua_tolstring(L, -1, &ypublic_length);
+	if (ypublic == NULL || ypublic_length > ECC_MAXLEN)
+		return -1;
+
+	// store Key in memory
+	memcpy(ctxud->priv_key, private, private_length);
+	memcpy(ctxud->pub_key_x, xpublic, xpublic_length);
+	memcpy(ctxud->pub_key_y, ypublic, ypublic_length);
+
+	ctxud->ecdsakey.curve = DTLS_ECDH_CURVE_SECP256R1;
+	ctxud->ecdsakey.priv_key = ctxud->priv_key;
+	ctxud->ecdsakey.pub_key_x = ctxud->pub_key_x;
+	ctxud->ecdsakey.pub_key_y = ctxud->pub_key_y;
+
+	//clean the stack
+	lua_pop(L, 4);
+	*result = &ctxud->ecdsakey;
+
 	return 0;
 }
 

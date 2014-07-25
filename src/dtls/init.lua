@@ -68,7 +68,7 @@ function M.wrap(udp, security)
   end
   local function cbreceive(data,host,port)
     if udp.dtls.connected and data and host and port then
-      udp.dtls.data[host..'_'..port] = udp.dtls.data[host..'_'..port] .. data      
+      udp.dtls.data[host..'_'..port] = udp.dtls.data[host..'_'..port] .. data
     end
   end
   local function cbevent()
@@ -83,6 +83,13 @@ function M.wrap(udp, security)
   m.o__index.sendto = dtlssendto
   m.o__index.receivefrom = dtlsreceivefrom
   m.o__index.close = dtlsclose
+end
+
+
+function M.hex2bin(str)
+  return (str:gsub('..', function (cc)
+    return string.char(tonumber(cc, 16))
+  end))
 end
 
 return M

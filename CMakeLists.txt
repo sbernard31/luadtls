@@ -33,4 +33,5 @@ set_target_properties( core PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_
 file(COPY src/dtls/init.lua DESTINATION "${CMAKE_BINARY_DIR}/dtls")
 file(COPY sample/sample.lua DESTINATION "${CMAKE_BINARY_DIR}")
 file(COPY sample/coresample.lua DESTINATION "${CMAKE_BINARY_DIR}")
+file(COPY sample/eccsample.lua DESTINATION "${CMAKE_BINARY_DIR}")
 
