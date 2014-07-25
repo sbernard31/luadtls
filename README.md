@@ -50,7 +50,7 @@ make
 
 Test it : (*Lua 5.1 and luasocket is needed.*)
 ```
-lua sample.lua
+lua -e "package.path = './?/init.lua;' .. package.path" sample.lua
 ```
 
 
