@@ -1,10 +1,12 @@
 local dtls = require 'dtls.core'
 local socket = require 'socket'
 
-dtls.init()
-
 local M = {}
 
+-- initialize dtls.core module
+dtls.init()
+
+-- secure receivefrom function
 local function dtlsreceivefrom(udp,size)
   local data, ip, port, msg = udp:oreceivefrom()
   if data and ip and port then
@@ -15,6 +17,7 @@ local function dtlsreceivefrom(udp,size)
   return data, ip, port, msg
 end
 
+-- secure sendto function (do handshake automatically at first send)
 local function dtlssendto(udp, datagram, ip, port)
   if not udp.dtls.connected then
     udp.dtls.ctx:connect(ip, port)
@@ -29,11 +32,20 @@ local function dtlssendto(udp, datagram, ip, port)
   udp.dtls.ctx:write(ip,port,datagram);
 end
 
+-- secure close function
 local function dtlsclose(udp)
+  -- free dtls context
   udp.dtls.ctx:free()
+  
+  -- close udp socket
   udp:oclose()
+  
+  -- clean metatable
+  local m = getmetatable(udp)
+  m.additionaldata[udp] = nil
 end
 
+-- make an UDP socket (from luasocket) secure through DTLS 
 function M.wrap(udp, security)
   -- wrap metatable
   local m = getmetatable(udp)
@@ -71,8 +83,8 @@ function M.wrap(udp, security)
       udp.dtls.data[host..'_'..port] = udp.dtls.data[host..'_'..port] .. data
     end
   end
-  local function cbevent()
-    udp.dtls.connected = true;
+  local function cbevent(event)
+    if event == "connected" then udp.dtls.connected = true end
   end
   local ctx = dtls.newcontext(cbsend, cbreceive, cbevent, security)
   udp.dtls= {}
@@ -86,6 +98,7 @@ function M.wrap(udp, security)
 end
 
 
+-- utility function to convert hexadecimal string to binary string
 function M.hex2bin(str)
   return (str:gsub('..', function (cc)
     return string.char(tonumber(cc, 16))

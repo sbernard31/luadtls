@@ -118,9 +118,10 @@ int getsockaddr(const char * ip, const char * port, session_t *dst) {
 
 int getip(session_t *dst, char * ip, char * portstr) {
 	int err;
-	// Get ip port.
-	err = getnameinfo(&dst->addr.sa, dst->size, ip,
-	INET6_ADDRSTRLEN, portstr, 6, NI_NUMERICHOST | NI_NUMERICSERV);
+	// Get IP/port.
+	err = getnameinfo(&dst->addr.sa, dst->size, ip, INET6_ADDRSTRLEN, portstr,
+			6,
+			NI_NUMERICHOST | NI_NUMERICSERV);
 	return err;
 }
 
@@ -130,19 +131,29 @@ int read_from_peer(struct dtls_context_t *ctx, session_t *session, uint8 *data,
 	ldtls_ctxuserdata * ldu = (ldtls_ctxuserdata *) dtls_get_app_data(ctx);
 	lua_State * L = ldu->L;
 
-	lua_rawgeti(L, LUA_REGISTRYINDEX, ldu->receiveCallbackRef);
-	lua_pushlstring(L, data, len);
-
+	// Get host and port
 	char addrstr[INET6_ADDRSTRLEN];
 	char portstr[6];
-	int res = getip(session, addrstr, portstr);
-	if (res)
-		dtls_emerg("cannot receive to peer \n");
+	int err = getip(session, addrstr, portstr);
+	if (err)
+		luaL_error(L, "Unable to get host/port for receive callback : %s",
+				gai_strerror(err));
 
-	//get host and port
-	lua_pushstring(L, addrstr);
-	lua_pushnumber(L, (int) strtol(portstr, (char **) NULL, 10));
-	lua_call(L, 3, 0);
+	// Call receive callback
+	lua_rawgeti(L, LUA_REGISTRYINDEX, ldu->receiveCallbackRef); // stack: ..., function
+	lua_pushlstring(L, data, len); // stack: ..., function, data
+	lua_pushstring(L, addrstr); // stack: ..., function, data, ip
+	lua_pushnumber(L, (int) strtol(portstr, (char **) NULL, 10)); // stack: ..., function, data, ip, port
+	lua_call(L, 3, 2); // stack: ..., ret1, ret2
+
+	// Manage error
+	if (lua_isnil(L,-2) && lua_isstring(L, -1)) {
+		char * err = lua_tostring(L, -1);
+		luaL_error(L, "Receive callback failed with error: %s", err);
+	}
+
+	lua_pop(L, 2); // clean the stack
+
 	return 0;
 }
 
@@ -152,48 +163,74 @@ int send_to_peer(struct dtls_context_t *ctx, session_t *session, uint8 *data,
 	ldtls_ctxuserdata * ldu = (ldtls_ctxuserdata *) dtls_get_app_data(ctx);
 	lua_State * L = ldu->L;
 
-	lua_rawgeti(L, LUA_REGISTRYINDEX, ldu->sendCallbackRef);
-	lua_pushlstring(L, data, len);
-
+	// Get host and port
 	char addrstr[INET6_ADDRSTRLEN];
 	char portstr[6];
 	int err = getip(session, addrstr, portstr);
 	if (err)
-		dtls_emerg("cannot send to peer \n");
+		luaL_error(L, "Unable to get host/port for send callback : %s",
+				gai_strerror(err));
 
-	//get host and port
-	lua_pushstring(L, addrstr);
-	lua_pushnumber(L, (int) strtol(portstr, (char **) NULL, 10));
-	lua_call(L, 3, 1);
+	// Call send callback
+	lua_rawgeti(L, LUA_REGISTRYINDEX, ldu->sendCallbackRef); // stack: ..., function
+	lua_pushlstring(L, data, len); // stack: ..., function, data
+	lua_pushstring(L, addrstr); // stack: ..., function, data, ip
+	lua_pushnumber(L, (int) strtol(portstr, (char **) NULL, 10)); // stack: ..., function, data, ip, port
+	lua_call(L, 3, 2); // stack: ..., ret1, ret2
 
-	// TODO manage error
-	int res = luaL_checkint(L, -1);
-
-	return res;
+	// Manage error
+	if (lua_isnil(L,-2) && lua_isstring(L, -1)) {
+		char * err = lua_tostring(L, -1);
+		luaL_error(L, "Send callback failed with error: %s", err);
+		return -1;
+	} else {
+		lua_pop(L, 2);
+		return len;
+	}
 }
 
 int handle_event(struct dtls_context_t *ctx, session_t *session,
-	dtls_alert_level_t level, unsigned short code) {
+		dtls_alert_level_t level, unsigned short code) {
 
-	if (code == DTLS_EVENT_CONNECTED) {	// Get lua context userdata.
-		ldtls_ctxuserdata * ldu = (ldtls_ctxuserdata *) dtls_get_app_data(ctx);
-		lua_State * L = ldu->L;
+	// Get lua context userdata.
+	ldtls_ctxuserdata * ldu = (ldtls_ctxuserdata *) dtls_get_app_data(ctx);
+	lua_State * L = ldu->L;
 
-		lua_rawgeti(L, LUA_REGISTRYINDEX, ldu->eventCallbackRef);
-
-		//get host and port
-		lua_call(L, 0, 0);
+	// Get Event
+	char * event = NULL;
+	if (code == DTLS_EVENT_CONNECTED) {
+		event = "connected";
+	} else if (code == DTLS_EVENT_CONNECT) {
+		event = "connect";
+	} else if (code == DTLS_EVENT_RENEGOTIATE) {
+		event = "renegotiate";
+	} else {
+		dtls_emerg("Unsupported/Unexpected event!\n");
 	}
+
+	// Call event callback
+	lua_rawgeti(L, LUA_REGISTRYINDEX, ldu->eventCallbackRef); // stack: ..., function
+	lua_pushstring(L, event); // stack: ..., function, event
+	lua_call(L, 1, 2); // stack: ..., ret1, ret2
+
+	// Manage error
+	if (lua_isnil(L,-2) && lua_isstring(L, -1)) {
+		char * err = lua_tostring(L, -1);
+		luaL_error(L, "Event callback failed with error: %s", err);
+	}
+
+	lua_pop(L, 2); // clean the stack
+
 	return 0;
 }
 
 #ifdef DTLS_PSK
 static int psksupported(lua_State *L, ldtls_ctxuserdata * ctxud) {
 	// get security table
-	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack : securitytable
+	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack :..., securitytable
 
 	// get the security field
-	lua_getfield(L, -1, "security"); //stack : securitytable, securityfield
+	lua_getfield(L, -1, "security"); //stack : ...,securitytable, securityfield
 	size_t size;
 	const char * securitymode = lua_tolstring(L, -1, &size);
 
@@ -213,21 +250,25 @@ static int get_psk_key(struct dtls_context_t *ctx, const session_t *session,
 	lua_State * L = ctxud->L;
 
 	// get security table
-	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack : securitytable
+	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack :..., securitytable
 
 	// get the identify field
-	lua_getfield(L, -1, "identity"); //stack : securitytable, identityfield
+	lua_getfield(L, -1, "identity"); //stack :..., securitytable, identityfield
 	size_t identity_length;
 	const char * identity = lua_tolstring(L, -1, &identity_length);
-	if (identity == NULL || identity_length > PSK_ID_MAXLEN)
+	if (identity == NULL || identity_length > PSK_ID_MAXLEN) {
+		lua_pop(L, 2);
 		return -1;
+	}
 
 	// get the key field
-	lua_getfield(L, -2, "key"); //stack : securitytable, identityfield, keyfield
+	lua_getfield(L, -2, "key"); //stack :...,securitytable, identityfield, keyfield
 	size_t key_length;
 	const char * key = lua_tolstring(L, -1, &key_length);
-	if (key == NULL || key_length > PSK_MAXLEN)
+	if (key == NULL || key_length > PSK_MAXLEN) {
+		lua_pop(L, 3);
 		return -1;
+	}
 
 	// store Key in memory
 	memcpy(ctxud->psk_id, identity, identity_length);
@@ -248,10 +289,10 @@ static int get_psk_key(struct dtls_context_t *ctx, const session_t *session,
 #ifdef DTLS_ECC
 static int eccsupported(lua_State *L, ldtls_ctxuserdata * ctxud) {
 	// get security table
-	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack : securitytable
+	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack : ..., securitytable
 
 	// get the security field
-	lua_getfield(L, -1, "security"); //stack : securitytable, securityfield
+	lua_getfield(L, -1, "security"); //stack : ..., securitytable, securityfield
 	size_t size;
 	const char * securitymode = lua_tolstring(L, -1, &size);
 
@@ -271,28 +312,34 @@ static int get_ecdsa_key(struct dtls_context_t *ctx, const session_t *session,
 	lua_State * L = ctxud->L;
 
 	// get security table
-	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack : securitytable
+	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack : ..., securitytable
 
 	// get the private key field
-	lua_getfield(L, -1, "privatekey"); //stack : securitytable, privatekeyfield
+	lua_getfield(L, -1, "privatekey"); //stack : ..., securitytable, privatekeyfield
 	size_t private_length;
 	const char * private = lua_tolstring(L, -1, &private_length);
-	if (private == NULL || private_length > ECC_MAXLEN)
+	if (private == NULL || private_length > ECC_MAXLEN) {
+		lua_pop(L, 2);
 		return -1;
+	}
 
 	// get the x public key field
-	lua_getfield(L, -2, "xpublickey"); //stack : securitytable, privatekeyfield, xpublickeyfield
+	lua_getfield(L, -2, "xpublickey"); //stack : ..., securitytable, privatekeyfield, xpublickeyfield
 	size_t xpublic_length;
 	const char * xpublic = lua_tolstring(L, -1, &xpublic_length);
-	if (xpublic == NULL || xpublic_length > ECC_MAXLEN)
+	if (xpublic == NULL || xpublic_length > ECC_MAXLEN) {
+		lua_pop(L, 3);
 		return -1;
+	}
 
 	// get the x public key field
-	lua_getfield(L, -3, "ypublickey"); //stack : securitytable, privatekeyfield, xpublickeyfield, ypublickeyfield
+	lua_getfield(L, -3, "ypublickey"); //stack : ..., securitytable, privatekeyfield, xpublickeyfield, ypublickeyfield
 	size_t ypublic_length;
 	const char * ypublic = lua_tolstring(L, -1, &ypublic_length);
-	if (ypublic == NULL || ypublic_length > ECC_MAXLEN)
+	if (ypublic == NULL || ypublic_length > ECC_MAXLEN) {
+		lua_pop(L, 4);
 		return -1;
+	}
 
 	// store Key in memory
 	memcpy(ctxud->priv_key, private, private_length);
@@ -314,6 +361,7 @@ static int get_ecdsa_key(struct dtls_context_t *ctx, const session_t *session,
 static int verify_ecdsa_key(struct dtls_context_t *ctx,
 		const session_t *session, const unsigned char *other_pub_x,
 		const unsigned char *other_pub_y, size_t key_size) {
+	// TODO Implement it...
 	return 0;
 }
 #endif /* DTLS_ECC */
@@ -411,16 +459,13 @@ static int ldtls_connect(lua_State *L) {
 	int err;
 	err = getsockaddr(host, port, &dst);
 	if (err) {
-		dtls_emerg("cannot connect \n");
-		lua_pushstring(L, strerror(err));
-		lua_error(L);
+		luaL_error(L, "Unable to get sockaddr to connect to peer %s:%s : %s",
+				host, port, gai_strerror(err));
 	}
 	// Try to connect.
 	int res = dtls_connect(ctxud->ctx, &dst);
-	if (!res) {
-		dtls_emerg("cannot dtls connect \n");
-		lua_pushstring(L, "dtls hanshake error");
-		lua_error(L);
+	if (res < 0) {
+		luaL_error(L, "Unable to connect to peer : %s:%s", host, port);
 	}
 
 	return 0;
@@ -443,14 +488,16 @@ static int ldtls_handle(lua_State *L) {
 	memset(&dst, 0, sizeof(session_t));
 	int err;
 	err = getsockaddr(host, port, &dst);
-	if (err)
-		dtls_emerg("cannot handle \n");
+	if (err) {
+		luaL_error(L,
+				"Unable to get sockaddr to handle data from peer %s:%s : %s",
+				host, port, gai_strerror(err));
+	}
 
+	// Handle data
 	err = dtls_handle_message(ctxud->ctx, &dst, buffer, length);
 	if (err < 0) {
-		dtls_emerg("dtls handle error\n");
-		lua_pushstring(L, "dtls handle error");
-		lua_error(L);
+		luaL_error(L, "Unable to handle data from peer : %s:%s", host, port);
 	}
 	return 0;
 }
@@ -460,8 +507,8 @@ static int ldtls_write(lua_State *L) {
 	ldtls_ctxuserdata* ctxud = checklctx(L, "write");
 
 	// Get peer address.
-	const char* host = luaL_checkstring(L, 2);
-	const char *port = luaL_checkstring(L, 3);
+	const char * host = luaL_checkstring(L, 2);
+	const char * port = luaL_checkstring(L, 3);
 
 	// Get data buffer.
 	size_t length;
@@ -472,10 +519,18 @@ static int ldtls_write(lua_State *L) {
 	memset(&dst, 0, sizeof(session_t));
 	int err;
 	err = getsockaddr(host, port, &dst);
-	if (err)
-		dtls_emerg("cannot write \n");
+	if (err) {
+		luaL_error(L,
+				"Unable to get sockaddr to write data to peer %s:%s : %s",
+				host, port, gai_strerror(err));
+	}
 
-	dtls_write(ctxud->ctx, &dst, buffer, length);
+	// Write data
+	err = dtls_write(ctxud->ctx, &dst, buffer, length);
+	if (err<0){
+		luaL_error(L, "Unable to write data to peer : %s:%s", host, port);
+	}
+
 	return 0;
 }
 
