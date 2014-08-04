@@ -173,7 +173,7 @@ int send_to_peer(struct dtls_context_t *ctx, session_t *session, uint8 *data,
 }
 
 int handle_event(struct dtls_context_t *ctx, session_t *session,
-		dtls_alert_level_t level, unsigned short code) {
+	dtls_alert_level_t level, unsigned short code) {
 
 	if (code == DTLS_EVENT_CONNECTED) {	// Get lua context userdata.
 		ldtls_ctxuserdata * ldu = (ldtls_ctxuserdata *) dtls_get_app_data(ctx);
@@ -410,14 +410,20 @@ static int ldtls_connect(lua_State *L) {
 	memset(&dst, 0, sizeof(session_t));
 	int err;
 	err = getsockaddr(host, port, &dst);
-	if (err)
+	if (err) {
 		dtls_emerg("cannot connect \n");
-
+		lua_pushstring(L, strerror(err));
+		lua_error(L);
+	}
 	// Try to connect.
 	int res = dtls_connect(ctxud->ctx, &dst);
-	if (!res)
-		dtls_emerg("cannot connect \n");
-	return 1;
+	if (!res) {
+		dtls_emerg("cannot dtls connect \n");
+		lua_pushstring(L, "dtls hanshake error");
+		lua_error(L);
+	}
+
+	return 0;
 }
 
 static int ldtls_handle(lua_State *L) {
@@ -425,8 +431,8 @@ static int ldtls_handle(lua_State *L) {
 	ldtls_ctxuserdata* ctxud = checklctx(L, "handle");
 
 	// Get peer address.
-	const char* host = luaL_checkstring(L, 2);
-	const char *port = luaL_checkstring(L, 3);
+	const char * host = luaL_checkstring(L, 2);
+	const char * port = luaL_checkstring(L, 3);
 
 	// Get data buffer.
 	size_t length;
@@ -440,7 +446,12 @@ static int ldtls_handle(lua_State *L) {
 	if (err)
 		dtls_emerg("cannot handle \n");
 
-	dtls_handle_message(ctxud->ctx, &dst, buffer, length);
+	err = dtls_handle_message(ctxud->ctx, &dst, buffer, length);
+	if (err < 0) {
+		dtls_emerg("dtls handle error\n");
+		lua_pushstring(L, "dtls handle error");
+		lua_error(L);
+	}
 	return 0;
 }
 
