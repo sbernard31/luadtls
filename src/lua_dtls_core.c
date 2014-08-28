@@ -69,13 +69,6 @@ typedef struct ldtls_ctxuserdata {
 	int eventCallbackRef;
 	int securiryTableRef;
 	dtls_handler_t cb;
-#ifdef DTLS_PSK
-#define PSK_ID_MAXLEN 256
-#define PSK_MAXLEN 256
-	dtls_psk_key_t pskkey;
-	unsigned char psk_id[PSK_ID_MAXLEN];
-	unsigned char psk_key[PSK_MAXLEN];
-#endif /* DTLS_PSK */
 #ifdef DTLS_ECC
 #define ECC_MAXLEN 128
 	dtls_ecdsa_key_t ecdsakey;
@@ -242,46 +235,49 @@ static int psksupported(lua_State *L, ldtls_ctxuserdata * ctxud) {
 	return res;
 }
 
-static int get_psk_key(struct dtls_context_t *ctx, const session_t *session,
-		const unsigned char *id, size_t id_len, const dtls_psk_key_t **result) {
+static int get_psk_info(struct dtls_context_t *ctx, const session_t *session,
+		dtls_credentials_type_t type, const unsigned char *id, size_t id_len,
+		unsigned char *result, size_t result_length) {
 
 	// Get lua context userdata.
 	ldtls_ctxuserdata * ctxud = (ldtls_ctxuserdata *) dtls_get_app_data(ctx);
 	lua_State * L = ctxud->L;
 
-	// get security table
+	// Get security table
 	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack :..., securitytable
 
-	// get the identify field
-	lua_getfield(L, -1, "identity"); //stack :..., securitytable, identityfield
-	size_t identity_length;
-	const char * identity = lua_tolstring(L, -1, &identity_length);
-	if (identity == NULL || identity_length > PSK_ID_MAXLEN) {
+	switch (type) {
+	case DTLS_PSK_IDENTITY:
+		// Get the identify field
+		lua_getfield(L, -1, "identity"); //stack :..., securitytable, identityfield
+		size_t identity_length;
+		const char * identity = lua_tolstring(L, -1, &identity_length);
+		if (identity == NULL || identity_length > result_length) {
+			lua_pop(L, 2);
+			dtls_warn("cannot set psk_identity -- buffer too small\n");
+			return DTLS_ALERT_INTERNAL_ERROR;
+		}
+
+		memcpy(result, identity, identity_length);
 		lua_pop(L, 2);
-		return -1;
+		return identity_length;
+	case DTLS_PSK_KEY:
+		// Get the key field
+		lua_getfield(L, -1, "key"); //stack :...,securitytable, keyfield
+		size_t key_length;
+		const char * key = lua_tolstring(L, -1, &key_length);
+		if (key == NULL || key_length > result_length) {
+			lua_pop(L, 2);
+			dtls_warn("cannot set psk -- buffer too small\n");
+			return DTLS_ALERT_INTERNAL_ERROR;
+		}
+		memcpy(result, key, key_length);
+		lua_pop(L, 2);
+		return key_length;
+	default:
+		dtls_warn("unsupported request type: %d\n", type);
 	}
 
-	// get the key field
-	lua_getfield(L, -2, "key"); //stack :...,securitytable, identityfield, keyfield
-	size_t key_length;
-	const char * key = lua_tolstring(L, -1, &key_length);
-	if (key == NULL || key_length > PSK_MAXLEN) {
-		lua_pop(L, 3);
-		return -1;
-	}
-
-	// store Key in memory
-	memcpy(ctxud->psk_id, identity, identity_length);
-	memcpy(ctxud->psk_key, key, key_length);
-
-	ctxud->pskkey.id = ctxud->psk_id;
-	ctxud->pskkey.id_length = identity_length;
-	ctxud->pskkey.key = ctxud->psk_key;
-	ctxud->pskkey.key_length = key_length;
-
-	//clean the stack
-	lua_pop(L, 3);
-	*result = &ctxud->pskkey;
 	return 0;
 }
 #endif /* DTLS_PSK */
@@ -424,9 +420,9 @@ static int ldtls_newcontext(lua_State *L) {
 	// Manage security.
 #ifdef DTLS_PSK
 	if (psksupported(L, ctxud)) {
-		ctxud->cb.get_psk_key = get_psk_key;
+		ctxud->cb.get_psk_info = get_psk_info;
 	} else {
-		ctxud->cb.get_psk_key = NULL;
+		ctxud->cb.get_psk_info = NULL;
 	}
 #endif /* DTLS_PSK */
 #ifdef DTLS_ECC
@@ -520,14 +516,13 @@ static int ldtls_write(lua_State *L) {
 	int err;
 	err = getsockaddr(host, port, &dst);
 	if (err) {
-		luaL_error(L,
-				"Unable to get sockaddr to write data to peer %s:%s : %s",
+		luaL_error(L, "Unable to get sockaddr to write data to peer %s:%s : %s",
 				host, port, gai_strerror(err));
 	}
 
 	// Write data
 	err = dtls_write(ctxud->ctx, &dst, buffer, length);
-	if (err<0){
+	if (err < 0) {
 		luaL_error(L, "Unable to write data to peer : %s:%s", host, port);
 	}
 
