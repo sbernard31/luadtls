@@ -40,7 +40,7 @@ git clone --recursive git@github.com:sbernard31/luadtls.git luadtls
 ```
 
 
-Compile it : (*You need cmake and autoconf -_-! ...*)
+Compile it : (*You need lua header files from package `liblua5.1-0-dev` and the tools `cmake` and `autoconf` -_-! ...*)  
 ```
 mkdir [builddir]
 cd [builddir]
