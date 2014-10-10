@@ -189,6 +189,14 @@ int handle_event(struct dtls_context_t *ctx, session_t *session,
 	ldtls_ctxuserdata * ldu = (ldtls_ctxuserdata *) dtls_get_app_data(ctx);
 	lua_State * L = ldu->L;
 
+	// Get host and port
+	char addrstr[INET6_ADDRSTRLEN];
+	char portstr[6];
+	int err = getip(session, addrstr, portstr);
+	if (err)
+		luaL_error(L, "Unable to get host/port for event callback : %s",
+				gai_strerror(err));
+
 	// Get Event
 	char * event = NULL;
 	if (code == DTLS_EVENT_CONNECTED) {
@@ -203,8 +211,10 @@ int handle_event(struct dtls_context_t *ctx, session_t *session,
 
 	// Call event callback
 	lua_rawgeti(L, LUA_REGISTRYINDEX, ldu->eventCallbackRef); // stack: ..., function
-	lua_pushstring(L, event); // stack: ..., function, event
-	lua_call(L, 1, 2); // stack: ..., ret1, ret2
+	lua_pushstring(L, addrstr); // stack: ..., function, ip
+	lua_pushnumber(L, (int) strtol(portstr, (char **) NULL, 10)); // stack: ..., function, ip, port
+	lua_pushstring(L, event); // stack: ..., function, ip, port, event
+	lua_call(L, 3, 2); // stack: ..., ret1, ret2
 
 	// Manage error
 	if (lua_isnil(L,-2) && lua_isstring(L, -1)) {
@@ -529,12 +539,65 @@ static int ldtls_write(lua_State *L) {
 	return 0;
 }
 
+static int ldtls_closed(lua_State *L) {
+	// Get lua DTLS context object.
+	ldtls_ctxuserdata* ctxud = checklctx(L, "closed");
+
+	// Get peer address.
+	const char * host = luaL_checkstring(L, 2);
+	const char * port = luaL_checkstring(L, 3);
+
+	// Find session object.
+	session_t session;
+	memset(&session, 0, sizeof(session_t));
+	int err;
+	err = getsockaddr(host, port, &session);
+	if (err) {
+		luaL_error(L, "Unable to get sockaddr to know if %s:%s is closed : %s",
+				host, port, gai_strerror(err));
+	}
+
+	// Write data
+	dtls_peer_t * peer = dtls_get_peer(ctxud->ctx, &session);
+	int closed =  peer == NULL || peer->state == DTLS_STATE_CLOSED || peer->state == DTLS_STATE_CLOSING;
+
+	return closed;
+}
+
+static int ldtls_close_peer(lua_State *L) {
+	// Get lua DTLS context object.
+	ldtls_ctxuserdata* ctxud = checklctx(L, "close");
+
+	// Get peer address.
+	const char * host = luaL_checkstring(L, 2);
+	const char * port = luaL_checkstring(L, 3);
+
+	// Find session object.
+	session_t session;
+	memset(&session, 0, sizeof(session_t));
+	int err;
+	err = getsockaddr(host, port, &session);
+	if (err) {
+		luaL_error(L, "Unable to get sockaddr to close peer %s:%s : %s",
+				host, port, gai_strerror(err));
+	}
+
+	// Write data
+	err = dtls_close(ctxud->ctx, &session);
+	if (err < 0) {
+		luaL_error(L, "Unable to close peer : %s:%s", host, port);
+	}
+
+	return 0;
+}
+
 static int ldtls_free_context(lua_State *L) {
 	// Get lua DTLS context object.
-	ldtls_ctxuserdata* ctxud = checklctx(L, "c");
+	ldtls_ctxuserdata* ctxud = checklctx(L, "free");
 
 	// Free the context.
 	dtls_free_context(ctxud->ctx);
+	ctxud->ctx = NULL;
 
 	// Release callbacks and tables.
 	luaL_unref(L, LUA_REGISTRYINDEX, ctxud->sendCallbackRef);
@@ -546,15 +609,12 @@ static int ldtls_free_context(lua_State *L) {
 	luaL_unref(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef);
 	ctxud->securiryTableRef = LUA_NOREF;
 
-	// Free lua DTLS context object
-	free(ctxud);
-
 	return 0;
 }
 
 static const struct luaL_Reg ldtls_objmeths[] = { { "connect", ldtls_connect },
-		{ "handle", ldtls_handle }, { "write", ldtls_write }, { "free",
-				ldtls_free_context }, {
+		{ "handle", ldtls_handle }, { "write", ldtls_write }, { "close", ldtls_close_peer },{ "free",
+				ldtls_free_context },{ "closed", ldtls_closed }, {
 		NULL, NULL } };
 
 static const struct luaL_Reg ldtls_modulefuncs[] = { { "init", ldtls_init }, {
