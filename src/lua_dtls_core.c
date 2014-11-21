@@ -257,21 +257,30 @@ static int get_psk_info(struct dtls_context_t *ctx, const session_t *session,
 	lua_rawgeti(L, LUA_REGISTRYINDEX, ctxud->securiryTableRef); //stack :..., securitytable
 
 	switch (type) {
-	case DTLS_PSK_IDENTITY:
-		// Get the identify field
+	case DTLS_PSK_IDENTITY: { // Get the identify field
 		lua_getfield(L, -1, "identity"); //stack :..., securitytable, identityfield
 		size_t identity_length;
 		const char * identity = lua_tolstring(L, -1, &identity_length);
 		if (identity == NULL || identity_length > result_length) {
 			lua_pop(L, 2);
 			dtls_warn("cannot set psk_identity -- buffer too small\n");
-			return DTLS_ALERT_INTERNAL_ERROR;
+			return dtls_alert_fatal_create(DTLS_ALERT_INTERNAL_ERROR);
 		}
 
 		memcpy(result, identity, identity_length);
 		lua_pop(L, 2);
 		return identity_length;
-	case DTLS_PSK_KEY:
+	}
+	case DTLS_PSK_KEY:{
+		// check identify field
+		lua_getfield(L, -1, "identity"); //stack :..., securitytable, identityfield
+		size_t identity_length;
+		const char * identity = lua_tolstring(L, -1, &identity_length);
+		if (id_len != identity_length || memcmp(identity, id, id_len) != 0) {
+			dtls_warn("PSK for unknown id requested, exiting\n");
+			return dtls_alert_fatal_create(DTLS_ALERT_ILLEGAL_PARAMETER);
+		}
+		lua_pop(L, 1); //stack :..., securitytable
 		// Get the key field
 		lua_getfield(L, -1, "key"); //stack :...,securitytable, keyfield
 		size_t key_length;
@@ -279,11 +288,12 @@ static int get_psk_info(struct dtls_context_t *ctx, const session_t *session,
 		if (key == NULL || key_length > result_length) {
 			lua_pop(L, 2);
 			dtls_warn("cannot set psk -- buffer too small\n");
-			return DTLS_ALERT_INTERNAL_ERROR;
+			return dtls_alert_fatal_create(DTLS_ALERT_INTERNAL_ERROR);
 		}
 		memcpy(result, key, key_length);
 		lua_pop(L, 2);
 		return key_length;
+	}
 	default:
 		dtls_warn("unsupported request type: %d\n", type);
 	}
@@ -559,7 +569,8 @@ static int ldtls_closed(lua_State *L) {
 
 	// Write data
 	dtls_peer_t * peer = dtls_get_peer(ctxud->ctx, &session);
-	int closed =  peer == NULL || peer->state == DTLS_STATE_CLOSED || peer->state == DTLS_STATE_CLOSING;
+	int closed = peer == NULL || peer->state == DTLS_STATE_CLOSED
+			|| peer->state == DTLS_STATE_CLOSING;
 
 	return closed;
 }
@@ -578,8 +589,8 @@ static int ldtls_close_peer(lua_State *L) {
 	int err;
 	err = getsockaddr(host, port, &session);
 	if (err) {
-		luaL_error(L, "Unable to get sockaddr to close peer %s:%s : %s",
-				host, port, gai_strerror(err));
+		luaL_error(L, "Unable to get sockaddr to close peer %s:%s : %s", host,
+				port, gai_strerror(err));
 	}
 
 	// Write data
@@ -613,8 +624,9 @@ static int ldtls_free_context(lua_State *L) {
 }
 
 static const struct luaL_Reg ldtls_objmeths[] = { { "connect", ldtls_connect },
-		{ "handle", ldtls_handle }, { "write", ldtls_write }, { "close", ldtls_close_peer },{ "free",
-				ldtls_free_context },{ "closed", ldtls_closed }, {
+		{ "handle", ldtls_handle }, { "write", ldtls_write }, { "close",
+				ldtls_close_peer }, { "free", ldtls_free_context }, { "closed",
+				ldtls_closed }, {
 		NULL, NULL } };
 
 static const struct luaL_Reg ldtls_modulefuncs[] = { { "init", ldtls_init }, {
