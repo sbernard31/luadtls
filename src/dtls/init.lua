@@ -169,4 +169,10 @@ function M.hex2bin(str)
   end))
 end
 
+function M.bin2hex(hex)
+    return (hex:gsub('.', function (c)
+        return string.format('%02x', string.byte(c))
+    end))
+end
+
 return M

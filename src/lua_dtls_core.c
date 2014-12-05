@@ -109,7 +109,7 @@ int getsockaddr(const char * ip, const char * port, session_t *dst) {
 	return 0;
 }
 
-int getip(session_t *dst, char * ip, char * portstr) {
+int getip(const session_t *dst, char * ip, char * portstr) {
 	int err;
 	// Get IP/port.
 	err = getnameinfo(&dst->addr.sa, dst->size, ip, INET6_ADDRSTRLEN, portstr,
@@ -377,8 +377,41 @@ static int get_ecdsa_key(struct dtls_context_t *ctx, const session_t *session,
 static int verify_ecdsa_key(struct dtls_context_t *ctx,
 		const session_t *session, const unsigned char *other_pub_x,
 		const unsigned char *other_pub_y, size_t key_size) {
-	// TODO Implement it...
-	return 0;
+
+	// Get lua context userdata.
+	ldtls_ctxuserdata * ldu = (ldtls_ctxuserdata *) dtls_get_app_data(ctx);
+	lua_State * L = ldu->L;
+
+	// Get host and port
+	char addrstr[INET6_ADDRSTRLEN];
+	char portstr[6];
+	int err = getip(session, addrstr, portstr);
+	if (err)
+		luaL_error(L, "Unable to get host/port for verify ecdsa key callback : %s",
+				gai_strerror(err));
+
+	// get security table
+	lua_rawgeti(L, LUA_REGISTRYINDEX, ldu->securiryTableRef); //stack : ..., securitytable
+
+	// Call receive callback
+	lua_getfield(L, -1, "verify"); //stack : ..., securitytable, verifyfunction,
+	if (!lua_isfunction(L,-1)){
+		lua_pop(L,2);
+		return 0;
+	}else{
+		lua_pushstring(L, addrstr); // stack: ..., securitytable, verifyfunction, ip
+		lua_pushnumber(L, (int) strtol(portstr, (char **) NULL, 10)); // stack: ...,, securitytable, verifyfunction, ip, port
+		lua_pushlstring(L,other_pub_x,key_size);// stack: ...,, securitytable, verifyfunction, ip, port, keyx
+		lua_pushlstring(L,other_pub_y,key_size);// stack: ...,, securitytable, verifyfunction, ip, port, keyx, keyy
+		lua_call(L, 4, 1); // stack: ..., bool
+
+		int valid = lua_toboolean(L,-1);
+		lua_pop(L,1);
+		if(valid)
+			return 0;
+		else
+			return -1;
+	}
 }
 #endif /* DTLS_ECC */
 

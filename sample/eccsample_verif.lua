@@ -10,7 +10,12 @@ dtls.wrap(udp,{
   security = "ECC",
   privatekey = dtls.hex2bin("e67b68d2aaeb6550f19d98cade3ad62b39532e02e6b422e1f7ea189dabaea5d2"),
   xpublickey = dtls.hex2bin("89c048261979208666f2bfb188be1968fc9021c416ce12828c06f4e314c167b5"),
-  ypublickey = dtls.hex2bin("cbf1eb7587f08e01688d9ada4be859137ca49f79394bad9179326b3090967b68")
+  ypublickey = dtls.hex2bin("cbf1eb7587f08e01688d9ada4be859137ca49f79394bad9179326b3090967b68"),
+  verify = function (ip,port,xkey,ykey)
+   print(ip, port, dtls.bin2hex(xkey),dtls.bin2hex(ykey))
+   --TODO do some key verification.
+   return true
+  end
 })
 -- to generate your key, you can use openssl command line :
 --     openssl ecparam -out ec_key3.pem -name prime256v1 -genkey
